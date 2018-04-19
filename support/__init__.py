@@ -14,7 +14,7 @@ class Task:
         self.remaining: int = estimated
         self.completed: Union[int, None] = None
         self.serviced: Union[int, None] = None
-        self.waited: Optional[int] = None
+        self.waited: int = 0
 
     def service(self, ticks: int):
         self.remaining -= ticks
@@ -40,10 +40,10 @@ class RealtimeTask(Task):
 
     def miss_check(self, time: int) -> None:
         if self.start_dln is not None:
-            if self.started is None and time > self.start_dln:
+            if time > self.start_dln and self.started is None:
                 self.missed = True
         if self.end_dln is not None:
-            if self.completed is None and time > self.end_dln:
+            if time >= self.end_dln and self.remaining:
                 self.missed = True
 
     def is_done(self) -> bool:
@@ -99,7 +99,7 @@ class RR(Simulator):
         while not self.all_done():
             for this_task in self.tasks:
                 if this_task.arrival == clk:
-                    self.ready.appendleft(this_task)
+                    self.ready.append(this_task)
             if self.running is None and len(self.ready):
                 self.running = self.ready.popleft()
                 self.running.started = clk
@@ -146,12 +146,19 @@ class SPN(Simulator):
             if self.running is None and len(self.ready):
                 self.running = self.ready.pop()
                 self.running.started = clk
-                clk += self.running.estimated
-                self.running.service(self.running.estimated)
-                self.running.completed = clk
-                print("{}:{}->{}".format(self.running.name,
-                                         self.running.started,
-                                         self.running.completed))
+            else:  #running not Node
+                self.running.service(1)
+                if self.running.is_done():
+                    self.running.completed = clk
+                    print("{}:{}->{}".format(self.running.name,
+                                             self.running.started,
+                                             self.running.completed))
+                    if len(self.ready):
+                        self.running = self.ready.pop()
+                        self.running.started = clk
+                    else:
+                        self.running = None
+            clk += 1
 
 
 class SRT(Simulator):
@@ -207,56 +214,51 @@ class HRRN(Simulator):
             for this_task in self.tasks:
                 if this_task.arrival == clk:
                     self.ready.append(this_task)
-            self.ready.sort(key=lambda x: (x.waited + x.estimated) / x.estimated, reverse=True)
-            if len(self.ready):
-                if self.running is None:
-                    self.running = self.ready[-1]
-                    self.running.started = clk
-                else:
-                    self.running.service(1)
-                    for this_task in self.ready:
-                        if this_task != self.running:
-                            this_task.wait(1)
-                    if self.running.is_done():
-                        self.running.completed = clk
-                        self.ready.remove(self.running)
-                        print("{}:{}->{}".format(self.running.name,
-                                                 self.running.started,
-                                                 self.running.completed))
-                        if len(self.ready):
-                            self.running = self.ready[-1]
-                            self.running.started = clk
-                        else:
-                            self.running = None
-                    elif self.running != self.ready[-1]:
-                        self.running.stopped = clk
-                        print("{}:{}->{}".format(self.running.name,
-                                                 self.running.started,
-                                                 self.running.stopped))
-                        self.running = self.ready[-1]
+            self.ready.sort(key=lambda x: (x.waited + x.estimated) / x.estimated)
+            if self.running is None and len(self.ready):
+                self.running = self.ready.pop()
+                self.running.started = clk
+            elif self.running is not None:
+                self.running.service(1)
+                for this_task in self.ready:
+                    if this_task != self.running:
+                        this_task.wait(1)
+                self.ready.sort(key=lambda x: (x.waited + x.estimated) / x.estimated)
+                if self.running.is_done():
+                    self.running.completed = clk
+                    print("{}:{}->{}".format(self.running.name,
+                                             self.running.started,
+                                             self.running.completed))
+                    if len(self.ready):
+                        self.running = self.ready.pop()
+                        self.running.started = clk
+                    else:
+                        self.running = None
             clk += 1
 
 
 class ED(Simulator):
     def __init__(self, tasks: List[RealtimeTask]):
         self.tasks: List[RealtimeTask] = tasks
-        self.ready: Optional[List[RealtimeTask]] = None
+        self.ready: List[RealtimeTask] = list()
         self.running: Optional[RealtimeTask] = None
+        self.missed: List[RealtimeTask] = list()
 
     def run(self):
         print("ED:")
         clk = 0
         while not self.all_done():
             for this_task in self.tasks:
-                if this_task.arrival == clk and not this_task.is_done():
+                if this_task.arrival == clk:
                     self.ready.append(this_task)
-            for this_task in self.ready:
-                this_task.miss_check(clk)
-                if this_task.missed:
-                    self.ready.remove(this_task)
-                    print("{}:Missed".format(this_task.name))
-
-            self.ready.sort(key=lambda x: x.end_dln, reverse=True)
+            if len(self.ready):
+                for this_task in self.ready:
+                    this_task.miss_check(clk)
+                    if this_task.missed:
+                        self.ready.remove(this_task)
+                        # print("{}:Missed".format(this_task.name))
+                        self.missed.append(this_task)
+            self.ready.sort(key=lambda x: x.start_dln, reverse=True)
             if self.running is None and len(self.ready):
                 self.running = self.ready.pop()
                 self.running.started = clk
@@ -267,9 +269,11 @@ class ED(Simulator):
                     print("{}:{}->{}".format(self.running.name,
                                              self.running.started,
                                              self.running.completed))
+                    while len(self.missed):
+                        print("{}:Missed".format(self.missed.pop().name))
                     if len(self.ready):
                         self.running = self.ready.pop()
-                        self.running = clk
+                        self.running.started = clk
                     else:
                         self.running = None
             clk += 1
@@ -278,11 +282,10 @@ class ED(Simulator):
 class EDUI(Simulator):
     def __init__(self, tasks: List[RealtimeTask], idle_allowed: int = 20):
         self.tasks: List[RealtimeTask] = tasks
-        for this_task in self.tasks:
-            this_task.start_dln = this_task.end_dln - this_task.estimated
         self.idle_allowed: int = idle_allowed
-        self.ready: Optional[List[RealtimeTask]] = None
+        self.ready: List[RealtimeTask] = list()
         self.running: Optional[RealtimeTask] = None
+        self.missed: List[RealtimeTask] = list()
 
     def run(self):
         print("EDUI:")
@@ -292,12 +295,14 @@ class EDUI(Simulator):
             for this_task in self.tasks:
                 if this_task.arrival == clk:
                     self.ready.append(this_task)
-            for this_task in self.ready:
-                this_task.miss_check(clk)
-                if this_task.missed:
-                    print("{}:Missed".format(this_task.name))
-                    self.ready.remove(this_task)
-            self.ready.sort(key=lambda x: x.end_dln, reverse=True)
+            if len(self.ready):
+                for this_task in self.ready:
+                    this_task.miss_check(clk)
+                    if this_task.missed:
+                        # print("{}:Missed".format(this_task.name))
+                        self.ready.remove(this_task)
+                        self.missed.append(this_task)
+            self.ready.sort(key=lambda x: x.start_dln, reverse=True)
             if self.running is None and idle > self.idle_allowed and len(self.ready):
                 self.running = self.ready.pop()
                 self.running.started = clk
@@ -308,16 +313,20 @@ class EDUI(Simulator):
                     if this_task.start_dln == clk:
                         self.running = this_task
                         break
-                self.running.started = clk
-                self.ready.remove(self.running)
-                idle = 0
+                if self.running is not None:
+                    self.running.started = clk
+                    self.ready.remove(self.running)
+                    idle = 0
             elif self.running is not None:
                 self.running.service(1)
+                idle = 0
                 if self.running.is_done():
                     self.running.completed = clk
                     print("{}:{}->{}".format(self.running.name,
                                              self.running.started,
                                              self.running.completed))
+                    while len(self.missed):
+                        print("{}:Missed".format(self.missed.pop().name))
                     if len(self.ready):
                         self.running = self.ready.pop()
                         self.running.started = clk
@@ -333,6 +342,7 @@ class RFCSC(Simulator):
         self.tasks: List[RealtimeTask] = tasks
         self.ready: Deque[RealtimeTask] = deque()
         self.running: Optional[RealtimeTask] = None
+        self.missed: List[RealtimeTask] = list()
 
     def run(self):
         print("RFCSC:")
@@ -344,8 +354,12 @@ class RFCSC(Simulator):
             for this_task in self.ready:
                 this_task.miss_check(clk)
                 if this_task.missed:
-                    print("{}:Missed".format(this_task.name))
-                    self.ready.remove(this_task)
+                    self.missed.append(this_task)
+            temp = deque()
+            for this_task in self.ready:
+                if not this_task.missed:
+                    temp.append(this_task)
+            self.ready = temp
             if self.running is None and len(self.ready):
                 self.running = self.ready.popleft()
                 self.running.started = clk
@@ -356,6 +370,8 @@ class RFCSC(Simulator):
                     print("{}:{}->{}".format(self.running.name,
                                              self.running.started,
                                              self.running.completed))
+                    while len(self.missed):
+                        print("{}:Missed".format(self.missed.pop().name))
                     if len(self.ready):
                         self.running = self.ready.popleft()
                         self.running.started = clk
@@ -375,11 +391,13 @@ class FP(Simulator):
             self.task_indexes[this_task.name] = 1
         self.ready: List[RealtimeTask] = list()
         self.running: Optional[RealtimeTask] = None
+        self.missed: List[RealtimeTask] = list()
 
     def run(self):
         print("FP:")
         clk = 0
         while not clk > self.end:
+            #spawn new task
             for this_task in self.tasks:
                 if clk % this_task.end_dln == 0:
                     new_task = deepcopy(this_task)
@@ -390,29 +408,34 @@ class FP(Simulator):
             for this_task in self.ready:
                 this_task.miss_check(clk)
                 if this_task.missed:
-                    print("{}:Missed".format(this_task.name))
+                    # print("{}:Missed".format(this_task.name))
+                    self.missed.append(this_task)
                     self.ready.remove(this_task)
             self.ready.sort(key=lambda x: x.priority, reverse=True)
             if self.running is None and len(self.ready):
                 self.running = self.ready.pop()
                 self.running.started = clk
             elif self.running is not None:
+                self.running.service(1)
                 if len(self.ready):
                     if self.running.priority > self.ready[-1].priority:
                         self.running.stopped = clk
                         print("{}:{}->{}".format(self.running.name,
                                                  self.running.started,
                                                  self.running.stopped))
+                        while len(self.missed):
+                            print("{}:Missed".format(self.missed.pop().name))
                         temp = self.ready.pop()
                         self.ready.append(self.running)
                         self.running = temp
                         self.running.started = clk
-                self.running.service(1)
                 if self.running.is_done():
                     self.running.completed = clk
                     print("{}:{}->{}".format(self.running.name,
                                              self.running.started,
                                              self.running.completed))
+                    while len(self.missed):
+                        print("{}:Missed".format(self.missed.pop().name))
                     if len(self.ready):
                         self.running = self.ready.pop()
                         self.running.started = clk
@@ -430,11 +453,13 @@ class EDCD(Simulator):
             self.task_indexes[this_task.name] = 1
         self.ready: List[RealtimeTask] = list()
         self.running: Optional[RealtimeTask] = None
+        self.missed: List[RealtimeTask] = list()
 
     def run(self):
         print("EDCD:")
         clk = 0
         while not clk > self.end:
+            #spawn new tasks
             for this_task in self.tasks:
                 if clk % this_task.end_dln == 0:
                     new_task = deepcopy(this_task)
@@ -442,35 +467,49 @@ class EDCD(Simulator):
                     new_task.end_dln = this_task.end_dln * self.task_indexes[this_task.name]
                     self.task_indexes[this_task.name] += 1
                     self.ready.append(new_task)
+            #check for misses
             for this_task in self.ready:
                 this_task.miss_check(clk)
                 if this_task.missed:
-                    print("{}:Missed".format(this_task.name))
+                    # print("{}:Missed".format(this_task.name))
+                    self.missed.append(this_task)
                     self.ready.remove(this_task)
+            # sort ready que by end dealine
             self.ready.sort(key=lambda x: x.end_dln, reverse=True)
-            if len(self.ready):
-                if self.running is None:
-                    self.running = self.ready.pop()
-                    self.running.started = clk
-                else:
-                    if self.running.end_dln > self.ready[-1].end_dln:
-                        self.running.stopped = clk
-                        print("{}:{}->{}".format(self.running.name,
-                                                 self.running.started,
-                                                 self.running.stopped))
-                        temp = self.ready.pop()
-                        self.ready.append(self.running)
-                        self.running = temp
+            # if not running and ready queue, get a task
+            if self.running is None and len(self.ready):
+                self.running = self.ready.pop()
+                self.running.started = clk
+            # if is runnung, service it (from last clk tick)
+            elif self.running is not None:
+                self.running.service(1)
+                # if done, print
+                if self.running.is_done():
+                    self.running.completed = clk
+                    print("{}:{}->{}".format(self.running.name,
+                                             self.running.started,
+                                             self.running.completed))
+                    # print any misses
+                    while len(self.missed):
+                        print("{}:Missed".format(self.missed.pop().name))
+                    # more in the ready queue? add it
+                    if len(self.ready):
+                        self.running = self.ready.pop()
                         self.running.started = clk
-                    self.running.service(1)
-                    if self.running.is_done():
-                        self.running.completed = clk
-                        print("{}:{}->{}".format(self.running.name,
-                                                 self.running.started,
-                                                 self.running.completed))
-                        if len(self.ready):
-                            self.running = self.ready.pop()
+                    else:
+                        self.running = None
+                # not done, check the deadline
+                else:
+                    if len(self.ready):
+                        if self.running.end_dln > self.ready[-1].end_dln:
+                            self.running.stopped = clk
+                            print("{}:{}->{}".format(self.running.name,
+                                                     self.running.started,
+                                                     self.running.stopped))
+                            while len(self.missed):
+                                print("{}:Missed".format(self.missed.pop().name))
+                            temp = self.ready.pop()
+                            self.ready.append(self.running)
+                            self.running = temp
                             self.running.started = clk
-                        else:
-                            self.running = None
             clk += 1
