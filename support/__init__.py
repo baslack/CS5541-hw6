@@ -399,7 +399,7 @@ class FP(Simulator):
         while not clk > self.end:
             #spawn new task
             for this_task in self.tasks:
-                if clk % this_task.end_dln == 0:
+                if clk % this_task.end_dln == this_task.arrival:
                     new_task = deepcopy(this_task)
                     new_task.name = this_task.name + "({})".format(self.task_indexes[this_task.name])
                     new_task.end_dln = this_task.end_dln * self.task_indexes[this_task.name]
@@ -461,7 +461,7 @@ class EDCD(Simulator):
         while not clk > self.end:
             #spawn new tasks
             for this_task in self.tasks:
-                if clk % this_task.end_dln == 0:
+                if clk % this_task.end_dln == this_task.arrival:
                     new_task = deepcopy(this_task)
                     new_task.name = this_task.name + "({})".format(self.task_indexes[this_task.name])
                     new_task.end_dln = this_task.end_dln * self.task_indexes[this_task.name]
