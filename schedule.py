@@ -2,6 +2,7 @@ from support import *
 import argparse
 import os
 import sys
+import re
 
 
 def perror(*args, **kwargs):
@@ -9,11 +10,28 @@ def perror(*args, **kwargs):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Perform Scheduling Simulation of given task file")
+    parser = argparse.ArgumentParser(description="Perform Scheduling Simulation of given task file",
+                                     epilog="accepts wildcards and multiple entries")
     parser.add_argument("files", nargs="+", help="lists of file paths to be processed")
     args = parser.parse_args()
 
     filepaths = [os.path.abspath(os.path.expanduser(filepath)) for filepath in args.files]
+
+    # wildcard processing
+    temp = list()
+    for search_string in filepaths:
+        if "*" in search_string:
+            base_dir, file_pattern = os.path.split(search_string)
+            front, back = file_pattern.split("*", 2)
+            regex = re.compile("{}[a-zA-Z0-9_-]+{}".format(front, back))
+            dir_contents = os.listdir(base_dir)
+            file_list = filter(lambda x: os.path.isfile(x), dir_contents)
+            file_list = filter(lambda x: regex.match(x), file_list)
+            for this_file in file_list:
+                temp.append(os.path.join(base_dir, this_file))
+        else:
+            temp.append()
+    filepaths = temp
 
     for filepath in filepaths:
         if not os.path.exists(filepath):
